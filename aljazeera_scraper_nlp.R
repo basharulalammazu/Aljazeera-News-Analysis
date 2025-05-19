@@ -1,17 +1,27 @@
-library(rvest)
-library(stringr)
-library(httr)
-library(dplyr)
-library(tm)  # For text cleaning functions
-library(textstem)             # Load
+# ----------------- Load Libraries -----------------
+library(rvest)           # For web scraping
+library(stringr)         # String manipulation
+library(httr)            # HTTP requests
+library(dplyr)           # Data manipulation
+library(tm)              # Text mining
+library(textstem)        # Lemmatization
+library(hunspell)        # Spell check (optional, not used here)
+library(qdapRegex)       # Regex cleaning
+library(textclean)       # Text cleaning utilities
+library(tokenizers)      # Tokenization
+library(stopwords)       # Stopword removal
+library(SnowballC)       # Stemming
 
 
-# Function to collect article URLs
-get_article_links <- function(base_url, total_articles = 100) {
+
+# ----------------- Step 1: Define Web Scraping Functions -----------------
+
+# Function to get article links from Al Jazeera category pages
+get_article_links <- function(base_url, total_articles = 100, total_pages = 100) {
   links <- c()
   page_num <- 1
   
-  while (length(links) < total_articles && page_num <= 100) {  # Cap page_num at 100
+  while (length(links) < total_articles && page_num <= total_pages) {
     cat("Scraping page", page_num, "from", base_url, "\n")
     page_url <- paste0(base_url, "?page=", page_num)
     page <- tryCatch(read_html(page_url), error = function(e) NULL)
@@ -22,33 +32,30 @@ get_article_links <- function(base_url, total_articles = 100) {
       html_attr("href") %>%
       unique()
     
-    if (length(new_links) == 0) break  # Stop if no more new links found
+    if (length(new_links) == 0) break
     
     new_links <- paste0("https://www.aljazeera.com", new_links)
     links <- unique(c(links, new_links))
     
     page_num <- page_num + 1
-    Sys.sleep(1)
+    Sys.sleep(1)  # Be polite to the server
   }
   
-  return(links[1:min(total_articles, length(links))])  # Avoid out-of-bounds error
+  return(links[1:min(total_articles, length(links))])
 }
 
-
-# Function to scrape article data
+# Function to extract article data
 scrape_article <- function(url, category) {
   page <- tryCatch(read_html(url), error = function(e) NULL)
   if (is.null(page)) return(NULL)
   
   title <- page %>% html_node("h1") %>% html_text(trim = TRUE)
   
-  # Extract date
   date <- page %>%
     html_node("div.date-simple span.screen-reader-text") %>%
     html_text(trim = TRUE) %>%
     str_remove("Published On ")
   
-  # Extract author (handle both <a> and plain span cases)
   author_node <- page %>% html_node("div.article-author-name")
   if (!is.na(html_node(author_node, "a.author-link") %>% html_text(trim = TRUE))) {
     author <- html_node(author_node, "a.author-link") %>% html_text(trim = TRUE)
@@ -56,7 +63,6 @@ scrape_article <- function(url, category) {
     author <- html_node(author_node, "span.article-author-name-item") %>% html_text(trim = TRUE)
   }
   
-  # Extract content from all <p> tags
   content <- page %>%
     html_nodes("p") %>%
     html_text(trim = TRUE) %>%
@@ -74,7 +80,10 @@ scrape_article <- function(url, category) {
 }
 
 
-# Define categories
+
+
+# ----------------- Step 2: Scrape Articles by Category -----------------
+
 categories <- list(
   news = "https://www.aljazeera.com/news",
   features = "https://www.aljazeera.com/features",
@@ -85,114 +94,99 @@ categories <- list(
   opinions = "https://www.aljazeera.com/opinions"
 )
 
-# Store results
 all_articles <- list()
 
-# Scrape each category
 for (category in names(categories)) {
   cat("Processing category:", category, "\n")
-  links <- get_article_links(categories[[category]], total_articles = 100)
+  links <- get_article_links(categories[[category]], total_articles = 100, total_pages = 1)
   articles <- lapply(links, function(link) scrape_article(link, category))
   all_articles[[category]] <- bind_rows(articles)
   cat("Completed category:", category, "\n\n")
 }
 
-# Merge and save
-final_df <- bind_rows(all_articles)
-write.csv(final_df, "D:/University/Semester 8/Data Science/Final/Project/aljazeera_all_categories_articles.csv", row.names = FALSE)
-print("All articles saved to 'aljazeera_all_categories_articles.csv'\n")
+# Combine all category data
+df <- bind_rows(all_articles)
 
-print("All ")
-print(final_df)
-dim(final_df)
+# Save raw scraped data
+write.csv(df, "D:/University/Semester 8/Data Science/Final/Project/IDS_SecD_G3.csv", row.names = FALSE)
+print("All articles saved to CSV.")
 
 
-# Define the text cleaning function
-Text_cleaning <- function(df) {
-  clean_text <- function(text) {
-    text <- tolower(text)                          # Convert to lowercase
-    text <- removeNumbers(text)                    # Remove numbers
-    text <- removePunctuation(text)                # Remove punctuation
-    text <- gsub("[^a-z\\s]", " ", text)            # Keep only letters and spaces
-    text <- stripWhitespace(text)                  # Remove extra whitespace
-    return(text)
-  }
-  
-  df_cleaned <- df %>%
-    mutate(
-      title = sapply(title, clean_text),
-      content = sapply(content, clean_text)
-    )
-  
-  return(df_cleaned)
+
+
+
+# ----------------- Step 3: Create Text Corpus -----------------
+
+corpus_title <- VCorpus(VectorSource(df$title))
+corpus_content <- VCorpus(VectorSource(df$content))
+head(corpus_content)
+
+
+
+# ----------------- Step 4: Clean Text -----------------
+
+clean_corpus <- function(corpus) {
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, content_transformer(function(x) gsub("[^a-z\\s]", " ", x)))
+  return(corpus)
 }
 
-head(articles)
-head(final_df, 3)
-clean_df <- Text_cleaning(final_df)
-head(clean_df, 3)
+clean_corpus_title <- clean_corpus(corpus_title)
+clean_corpus_content <- clean_corpus(corpus_content)
+
+df$cleaned_title <- sapply(clean_corpus_title, content)
+df$cleaned_content <- sapply(clean_corpus_content, content)
+
+print(df$cleaned_content)
 
 
+# ----------------- Step 5: Tokenization -----------------
 
-
-
-
-# Load the required libraries
-library(tokenizers)
-library(stopwords)
-
-# Define the tokenize function with stopword removal
-tokenize <- function(text_vector) {
-  combined_text <- paste(text_vector, collapse = " ")         # Combine all text
-  tokens <- tokenize_words(combined_text)                     # Tokenize using tokenizers package
-  tokens <- unlist(tokens)                                    # Flatten the list
-  tokens <- tokens[!tokens %in% stopwords("en")]              # Remove stopwords
-  return(tokens)
+tokenize_text_rowwise <- function(text_vector) {
+  lapply(text_vector, function(text) {
+    tokens <- tokenize_words(text)[[1]]
+    tokens <- tokens[!tokens %in% stopwords("en")]
+    return(tokens)
+  })
 }
 
-
-# Tokenize titles without stopwords
-title_tokens <- tokenize(final_df$title)
-print("Tokenized Titles (No Stopwords):\n")
-print(title_tokens)
-
-# Tokenize cleaned content without stopwords
-content_tokens <- tokenize(clean_df$content)
-print("Tokenized Content (No Stopwords):\n")
-print(content_tokens)
+title_tokens_list <- tokenize_text_rowwise(df$cleaned_title)
+content_tokens_list <- tokenize_text_rowwise(df$cleaned_content)
 
 
+print(content_tokens_list)
 
-# Stemming
-stemming<- function(text_vector){
-  return(stemDocument(text_vector))
-}
+# ----------------- Step 6: Stemming -----------------
 
-print("Stemmed Titles:\n")
-stemmed_title <- stemming(title_tokens)
-print(stemmed_title)
-
-
-print("Stemmed Content:\n")
-stemmed_content <- stemming(content_tokens)
-print(stemmed_content)
-
-
-
-
-
-# Lemmatization
-lemmatization <- function(text_vector){
-  return(lemmatize_words(text_vector))
+stem_tokens_rowwise <- function(token_list) {
+  lapply(token_list, function(tokens) wordStem(tokens, language = "en"))
 }
 
 
-lemmatization_title <- lemmatization(stemmed_title)
-print("\nLemmatized Title Data (First 50 words):\n")
-print(head(lemmatization_title, 50))
+stemmed_title_list <- stem_tokens_rowwise(title_tokens_list)
+stemmed_content_list <- stem_tokens_rowwise(content_tokens_list)
+
+print(stemmed_content_list)
 
 
-lemmatization_content <- lemmatization(stemmed_content)
-print("\nLemmatized Content Data (First 50 words):\n")
-print(head(lemmatization_content, 50))
+# ----------------- Step 7: Lemmatization -----------------
 
+lemmatize_text_rowwise <- function(token_list) {
+  lapply(token_list, lemmatize_words)
+}
+
+lemmatized_title_list <- lemmatize_text_rowwise(title_tokens_list)
+lemmatized_content_list <- lemmatize_text_rowwise(content_tokens_list)
+
+df$lemmatized_title <- sapply(lemmatized_title_list, paste, collapse = " ")
+df$lemmatized_content <- sapply(lemmatized_content_list, paste, collapse = " ")
+
+
+print(df$lemmatized_content)
+
+
+# ----------------- Step 8: Save Cleaned Data -----------------
+write.csv(df$lemmatized_content, "D:/University/Semester 8/Data Science/Final/Project/IDS_SecD_G3_Corpus.csv", row.names = FALSE)
+cat("Final cleaned corpus saved to 'IDS_SecD_G3_Final_Corpus.csv'\n")
