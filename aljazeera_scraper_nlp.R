@@ -11,8 +11,9 @@ library(textclean)       # Text cleaning utilities
 library(tokenizers)      # Tokenization
 library(stopwords)       # Stopword removal
 library(SnowballC)       # Stemming
-
-
+library(tidytext)
+library(ggplot2)
+library(wordcloud)
 
 # ----------------- Step 1: Define Web Scraping Functions -----------------
 
@@ -107,12 +108,8 @@ for (category in names(categories)) {
 # Combine all category data
 df <- bind_rows(all_articles)
 
-# Save raw scraped data
-write.csv(df, "D:/University/Semester 8/Data Science/Final/Project/IDS_SecD_G3.csv", row.names = FALSE)
-print("All articles saved to CSV.")
 
-
-
+dim(df)
 
 
 # ----------------- Step 3: Create Text Corpus -----------------
@@ -187,6 +184,103 @@ df$lemmatized_content <- sapply(lemmatized_content_list, paste, collapse = " ")
 print(df$lemmatized_content)
 
 
-# ----------------- Step 8: Save Cleaned Data -----------------
-write.csv(df$lemmatized_content, "D:/University/Semester 8/Data Science/Final/Project/IDS_SecD_G3_Corpus.csv", row.names = FALSE)
-cat("Final cleaned corpus saved to 'IDS_SecD_G3_Final_Corpus.csv'\n")
+
+
+
+# Step 3: Create Corpus from processed_description
+corpus <- Corpus(VectorSource(df$lemmatized_content))
+
+# Step 4: Clean and preprocess the text
+corpus <- tm_map(corpus, content_transformer(tolower))
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, removeWords, stopwords("english"))
+corpus <- tm_map(corpus, stripWhitespace)
+
+# Step 5: Create Document-Term Matrix
+dtm <- DocumentTermMatrix(corpus)
+dtm <- removeSparseTerms(dtm, 0.95)  # Remove sparse terms
+
+# Step 6: Apply LDA for Topic Modeling
+k <- 5  # Number of topics
+lda_model <- LDA(dtm, k = k, control = list(seed = 1234))
+
+# Step 7: Examine the Topics
+# Step 7.1: Get the most probable words per topic
+topics <- tidy(lda_model, matrix = "beta")
+top_terms <- topics %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  arrange(topic, -beta)
+
+print(top_terms)
+
+
+
+# Step 7.2: Get the topic proportions per document
+doc_topics <- tidy(lda_model, matrix = "gamma")
+head(doc_topics)
+
+library(tidytext)
+library(dplyr)
+library(ggplot2)
+
+# Tidy the LDA model (get beta matrix)
+topics <- tidy(lda_model, matrix = "beta")
+
+# Extract top 10 terms per topic
+top_terms <- topics %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+# Get top 3 terms per topic to use as labels
+topic_labels_df <- top_terms %>%
+  group_by(topic) %>%
+  slice_max(order_by = beta, n = 3) %>%
+  summarise(label = paste(term, collapse = ", ")) %>%
+  ungroup()
+
+# Join labels with original top_terms
+top_terms_labeled <- top_terms %>%
+  left_join(topic_labels_df, by = "topic")
+
+# Plot with automatic labels
+ggplot(top_terms_labeled, aes(x = reorder_within(term, beta, topic), y = beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ label, scales = "free_y") +  # Using generated labels
+  scale_x_reordered() +
+  coord_flip() +
+  labs(
+    title = "LDA Topics with Automatically Generated Labels",
+    subtitle = "Top 10 terms per topic — labels from top 3 terms",
+    x = "Term",
+    y = "Probability (Beta)"
+  ) +
+  theme_minimal()
+
+
+# Save to CSV
+
+# =======================
+# Step 9: Word Cloud
+# =======================
+tdm <- TermDocumentMatrix(corpus)
+m <- as.matrix(tdm)
+word_freqs <- sort(rowSums(m), decreasing = TRUE)
+word_freqs_df <- data.frame(word = names(word_freqs), freq = word_freqs)
+
+set.seed(123)
+wordcloud(words = word_freqs_df$word,
+          freq = word_freqs_df$freq,
+          min.freq = 2,
+          max.words = 200,
+          random.order = FALSE,
+          colors = brewer.pal(8, "Dark2"))
+
+
+
+#----------------------Topic modeling evaluation-----------------------------
+
+
