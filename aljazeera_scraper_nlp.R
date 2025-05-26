@@ -1,3 +1,6 @@
+# install.packages(c("rvest", "stringr", "httr", "dplyr", "tm", "textstem", "hunspell", "qdapRegex", "textclean", "tokenizers", "stopwords", "SnowballC", "tidytext", "ggplot2", "wordcloud", "igraph", "ggraph", "tidyr"))
+
+
 # ----------------- Load Libraries -----------------
 library(rvest)           # For web scraping
 library(stringr)         # String manipulation
@@ -14,77 +17,93 @@ library(SnowballC)       # Stemming
 library(tidytext)
 library(ggplot2)
 library(wordcloud)
+library(igraph)
+library(ggraph)
+library(tidyr)
+
+
 
 # ----------------- Step 1: Define Web Scraping Functions -----------------
-
-# Function to get article links from Al Jazeera category pages
-get_article_links <- function(base_url, total_articles = 100, total_pages = 100) {
-  links <- c()
+scrape_category_aljazeera <- function(category_url, category_name, max_articles = 100, max_pages = 100) {
+  base_url <- "https://www.aljazeera.com"
+  all_articles <- list()
   page_num <- 1
   
-  while (length(links) < total_articles && page_num <= total_pages) {
-    cat("Scraping page", page_num, "from", base_url, "\n")
-    page_url <- paste0(base_url, "?page=", page_num)
-    page <- tryCatch(read_html(page_url), error = function(e) NULL)
-    if (is.null(page)) break
+  while (length(all_articles) < max_articles && page_num <= max_pages) {
+    url <- paste0(category_url, "?page=", page_num)
+    cat("Reading:", url, "\n")
     
-    new_links <- page %>%
+    html <- tryCatch(read_html(url), error = function(e) NULL)
+    if (is.null(html)) break
+    
+    links <- html %>%
       html_nodes("a.u-clickable-card__link") %>%
       html_attr("href") %>%
       unique()
     
-    if (length(new_links) == 0) break
+    if (length(links) == 0) break
+    links <- paste0(base_url, links)
     
-    new_links <- paste0("https://www.aljazeera.com", new_links)
-    links <- unique(c(links, new_links))
+    for (link in links) {
+      if (length(all_articles) >= max_articles) break
+      
+      article_page <- tryCatch(read_html(link), error = function(e) NULL)
+      if (is.null(article_page)) next
+      
+      title <- article_page %>% html_node("h1") %>% html_text(trim = TRUE)
+      
+      date <- article_page %>%
+        html_node("div.date-simple span.screen-reader-text") %>%
+        html_text(trim = TRUE) %>%
+        str_remove("Published On ")
+      
+      author_node <- article_page %>% html_node("div.article-author-name")
+      author <- if (!is.null(author_node)) {
+        tryCatch({
+          a_text <- html_node(author_node, "a.author-link") %>% html_text(trim = TRUE)
+          if (!is.na(a_text)) {
+            a_text
+          } else {
+            html_node(author_node, "span.article-author-name-item") %>% html_text(trim = TRUE)
+          }
+        }, error = function(e) NA)
+      } else {
+        NA
+      }
+      
+      content <- article_page %>%
+        html_nodes("p") %>%
+        html_text(trim = TRUE) %>%
+        paste(collapse = " ")
+      
+      if (!is.na(title) && nchar(content) > 50 &&
+          !(link %in% sapply(all_articles, function(x) x$url)) &&
+          !(title %in% sapply(all_articles, function(x) x$title)) &&
+          !(content %in% sapply(all_articles, function(x) x$content))) {
+        
+        article <- data.frame(
+          date = date,
+          title = title,
+          author = author,
+          content = content,
+          category = category_name,
+          url = link,
+          stringsAsFactors = FALSE
+        )
+        all_articles[[length(all_articles) + 1]] <- article
+      }
+    }
     
     page_num <- page_num + 1
-    Sys.sleep(1)  # Be polite to the server
+    Sys.sleep(1)
   }
   
-  return(links[1:min(total_articles, length(links))])
+  return(bind_rows(all_articles))
 }
-
-# Function to extract article data
-scrape_article <- function(url, category) {
-  page <- tryCatch(read_html(url), error = function(e) NULL)
-  if (is.null(page)) return(NULL)
-  
-  title <- page %>% html_node("h1") %>% html_text(trim = TRUE)
-  
-  date <- page %>%
-    html_node("div.date-simple span.screen-reader-text") %>%
-    html_text(trim = TRUE) %>%
-    str_remove("Published On ")
-  
-  author_node <- page %>% html_node("div.article-author-name")
-  if (!is.na(html_node(author_node, "a.author-link") %>% html_text(trim = TRUE))) {
-    author <- html_node(author_node, "a.author-link") %>% html_text(trim = TRUE)
-  } else {
-    author <- html_node(author_node, "span.article-author-name-item") %>% html_text(trim = TRUE)
-  }
-  
-  content <- page %>%
-    html_nodes("p") %>%
-    html_text(trim = TRUE) %>%
-    paste(collapse = " ")
-  
-  data.frame(
-    category = category,
-    title = title,
-    date = date,
-    author = author,
-    content = content,
-    url = url,
-    stringsAsFactors = FALSE
-  )
-}
-
-
-
 
 # ----------------- Step 2: Scrape Articles by Category -----------------
 
+# Define categories
 categories <- list(
   news = "https://www.aljazeera.com/news",
   features = "https://www.aljazeera.com/features",
@@ -95,22 +114,29 @@ categories <- list(
   opinions = "https://www.aljazeera.com/opinions"
 )
 
+# Scrape all categories
 all_articles <- list()
 
-for (category in names(categories)) {
-  cat("Processing category:", category, "\n")
-  links <- get_article_links(categories[[category]], total_articles = 100, total_pages = 1)
-  articles <- lapply(links, function(link) scrape_article(link, category))
-  all_articles[[category]] <- bind_rows(articles)
-  cat("Completed category:", category, "\n\n")
+for (cat_name in names(categories)) {
+  cat("Processing category:", cat_name, "\n")
+  df_cat <- scrape_category_aljazeera(categories[[cat_name]], cat_name, max_articles = 100, max_pages = 100)
+  all_articles[[cat_name]] <- df_cat
+  cat("Completed category:", cat_name, "\n\n")
 }
 
-# Combine all category data
+# ----------------- Step 3: Combine and Remove Duplicates -----------------
+
+# Combine all
 df <- bind_rows(all_articles)
 
+# Remove duplicates by url, title, content
+df <- df %>% distinct(url, title, content, .keep_all = TRUE)
 
+# Save to CSV
+write.csv(df, "D:/University/Semester 8/Data Science/Final/Project/aljazeera.csv", row.names = FALSE)
+
+# View dimensions
 dim(df)
-
 
 # ----------------- Step 3: Create Text Corpus -----------------
 
@@ -184,6 +210,7 @@ df$lemmatized_content <- sapply(lemmatized_content_list, paste, collapse = " ")
 print(df$lemmatized_content)
 
 
+write.csv(df$lemmatized_content, "D:/University/Semester 8/Data Science/Final/Project/aljazeera_lemmatized.csv", row.names = FALSE)
 
 
 
@@ -221,45 +248,31 @@ print(top_terms)
 doc_topics <- tidy(lda_model, matrix = "gamma")
 head(doc_topics)
 
-library(tidytext)
-library(dplyr)
-library(ggplot2)
+
 
 # Tidy the LDA model (get beta matrix)
 topics <- tidy(lda_model, matrix = "beta")
 
-# Extract top 10 terms per topic
+# Get top 10 terms per topic
 top_terms <- topics %>%
   group_by(topic) %>%
   top_n(10, beta) %>%
   ungroup() %>%
   arrange(topic, -beta)
 
-# Get top 3 terms per topic to use as labels
-topic_labels_df <- top_terms %>%
-  group_by(topic) %>%
-  slice_max(order_by = beta, n = 3) %>%
-  summarise(label = paste(term, collapse = ", ")) %>%
-  ungroup()
-
-# Join labels with original top_terms
-top_terms_labeled <- top_terms %>%
-  left_join(topic_labels_df, by = "topic")
-
-# Plot with automatic labels
-ggplot(top_terms_labeled, aes(x = reorder_within(term, beta, topic), y = beta, fill = factor(topic))) +
+# Plot using just topic numbers (no labels)
+ggplot(top_terms, aes(x = reorder_within(term, beta, topic), y = beta, fill = factor(topic))) +
   geom_col(show.legend = FALSE) +
-  facet_wrap(~ label, scales = "free_y") +  # Using generated labels
+  facet_wrap(~ paste("Topic", topic), scales = "free_y") +  # <- No custom or auto label
   scale_x_reordered() +
   coord_flip() +
   labs(
-    title = "LDA Topics with Automatically Generated Labels",
-    subtitle = "Top 10 terms per topic — labels from top 3 terms",
+    title = "LDA Topics",
+    subtitle = "Top 10 terms per topic",
     x = "Term",
     y = "Probability (Beta)"
   ) +
   theme_minimal()
-
 
 # Save to CSV
 
@@ -282,5 +295,43 @@ wordcloud(words = word_freqs_df$word,
 
 
 #----------------------Topic modeling evaluation-----------------------------
+# Top 20 frequent words
+top_words <- word_freqs_df %>%
+  top_n(20, freq) %>%
+  arrange(desc(freq))
 
+# Plot
+ggplot(top_words, aes(x = reorder(word, freq), y = freq)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 20 Most Frequent Words",
+       x = "Words", y = "Frequency") +
+  theme_minimal()
+
+
+# Find associations with a specific word, e.g., "palestine"
+findAssocs(tdm, terms = "palestine", corlimit = 0.2)
+
+
+df <- df %>%
+  mutate(word_count = str_count(content, "\\w+"))
+
+
+
+ggplot(df, aes(x = word_count)) +
+  geom_histogram(binwidth = 100, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Article Word Counts",
+       x = "Word Count",
+       y = "Number of Articles") +
+  theme_minimal()
+
+
+
+ggplot(df, aes(x = category)) +
+  geom_bar(fill = "darkorange") +
+  labs(title = "Number of Articles by Category",
+       x = "Category",
+       y = "Count of Articles") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
