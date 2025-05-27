@@ -20,6 +20,8 @@ library(wordcloud)
 library(igraph)
 library(ggraph)
 library(tidyr)
+library(reshape2)
+library(topicmodels)
 
 
 
