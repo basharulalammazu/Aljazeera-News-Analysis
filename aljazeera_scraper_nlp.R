@@ -133,8 +133,7 @@ df <- bind_rows(all_articles)
 df <- df %>% distinct(url, title, content, .keep_all = TRUE)
 
 # Save to CSV
-write.csv(df, "D:/University/Semester 8/Data Science/Final/Project/aljazeera.csv", row.names = FALSE)
-
+write.csv(df, "D:/University/Semester 8/Data Science/Final/Project/initial_content.csv", row.names = FALSE)
 # View dimensions
 dim(df)
 
@@ -210,8 +209,7 @@ df$lemmatized_content <- sapply(lemmatized_content_list, paste, collapse = " ")
 print(df$lemmatized_content)
 
 
-write.csv(df$lemmatized_content, "D:/University/Semester 8/Data Science/Final/Project/aljazeera_lemmatized.csv", row.names = FALSE)
-
+write.csv(df$lemmatized_content, "D:/University/Semester 8/Data Science/Final/Project/final_corpus.csv", row.names = FALSE)
 
 
 # Step 3: Create Corpus from processed_description
@@ -228,8 +226,17 @@ corpus <- tm_map(corpus, stripWhitespace)
 dtm <- DocumentTermMatrix(corpus)
 dtm <- removeSparseTerms(dtm, 0.95)  # Remove sparse terms
 
+
+freq <- sort(colSums(as.matrix(dtm)), decreasing=TRUE)
+head(freq, 10)
+
+
+
+
+
+
 # Step 6: Apply LDA for Topic Modeling
-k <- 5  # Number of topics
+k <- 7  # Number of topics
 lda_model <- LDA(dtm, k = k, control = list(seed = 1234))
 
 # Step 7: Examine the Topics
@@ -241,6 +248,17 @@ top_terms <- topics %>%
   arrange(topic, -beta)
 
 print(top_terms)
+
+
+
+topic_probs <- posterior(lda_model)$topics
+head(topic_probs, 5)
+
+top_topic <- apply(topic_probs, 1, which.max)
+head(top_topic, 10)  
+
+topic_terms <- posterior(lda_model)$terms
+head(topic_terms[, 1:5])  
 
 
 
@@ -263,7 +281,7 @@ top_terms <- topics %>%
 # Plot using just topic numbers (no labels)
 ggplot(top_terms, aes(x = reorder_within(term, beta, topic), y = beta, fill = factor(topic))) +
   geom_col(show.legend = FALSE) +
-  facet_wrap(~ paste("Topic", topic), scales = "free_y") +  # <- No custom or auto label
+  facet_wrap(~ paste("Topic", topic), scales = "free_y") +  
   scale_x_reordered() +
   coord_flip() +
   labs(
@@ -275,6 +293,10 @@ ggplot(top_terms, aes(x = reorder_within(term, beta, topic), y = beta, fill = fa
   theme_minimal()
 
 # Save to CSV
+
+
+
+
 
 # =======================
 # Step 9: Word Cloud
@@ -312,11 +334,8 @@ ggplot(top_words, aes(x = reorder(word, freq), y = freq)) +
 # Find associations with a specific word, e.g., "palestine"
 findAssocs(tdm, terms = "palestine", corlimit = 0.2)
 
-
 df <- df %>%
   mutate(word_count = str_count(content, "\\w+"))
-
-
 
 ggplot(df, aes(x = word_count)) +
   geom_histogram(binwidth = 100, fill = "skyblue", color = "black") +
@@ -334,4 +353,3 @@ ggplot(df, aes(x = category)) +
        y = "Count of Articles") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
