@@ -211,7 +211,7 @@ df$lemmatized_content <- sapply(lemmatized_content_list, paste, collapse = " ")
 print(df$lemmatized_content)
 
 
-write.csv(df$lemmatized_content, "D:/University/Semester 8/Data Science/Final/Project/final_corpus.csv", row.names = FALSE)
+write.csv(df$lemmatized_content, "D:/University/Semester 8/Data Science/Final/Project/clean_corpus.csv", row.names = FALSE)
 
 
 # Step 3: Create Corpus from processed_description
